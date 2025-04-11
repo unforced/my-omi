@@ -1,0 +1,51 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+buildscript {
+    // Use a Kotlin version compatible with your Flutter SDK and AGP
+    ext.kotlin_version = '1.9.24'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // Use an Android Gradle Plugin (AGP) version compatible with Gradle and Flutter
+        classpath 'com.android.tools.build:gradle:8.2.0' 
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    // Force Java 17 for all subprojects
+    afterEvaluate { project ->
+        if (project.plugins.hasPlugin("com.android.application") || project.plugins.hasPlugin("com.android.library")) {
+            project.android {
+                compileOptions {
+                    // Align with Kotlin: Use Java 17
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }
+                // Also ensure Kotlin JVM target is consistent if Kotlin is used
+                if (project.plugins.hasPlugin("kotlin-android")) {
+                   kotlinOptions {
+                       jvmTarget = "17"
+                   }
+                }
+            }
+        }
+    }
+}
+
+rootProject.buildDir = '../build'
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
