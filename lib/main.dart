@@ -13,6 +13,10 @@ import 'package:just_audio/just_audio.dart'; // Import just_audio
 import 'package:share_plus/share_plus.dart'; // Import share_plus
 import 'package:device_info_plus/device_info_plus.dart'; // Import device_info_plus
 import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // Import FlutterBluePlus
+import 'package:omi_minimal_fork/utils/audio/wav_bytes.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
+import 'package:omi_minimal_fork/utils/firmware_mixin.dart';
+import 'package:file_picker/file_picker.dart';
 
 // TODO: Add imports for State Management (Provider)
 
@@ -184,8 +188,10 @@ class HomePage extends StatefulWidget { // Change to StatefulWidget
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> { // Create State
+// Apply FirmwareMixin and add state for selected file
+class _HomePageState extends State<HomePage> with FirmwareMixin<HomePage> { // Create State and add Mixin
   final AudioPlayer _audioPlayer = AudioPlayer(); // Audio player instance
+  String? _selectedFirmwarePath;
 
   @override
   void dispose() {
@@ -284,133 +290,215 @@ class _HomePageState extends State<HomePage> { // Create State
           ),
         ],
       ),
-      body: Column(
-        children: [
-          _buildConnectionStatus(context, deviceProvider, captureProvider), // Pass captureProvider
-          const Divider(),
-          Expanded(
-            flex: 1,
-            child: _buildDeviceList(context, deviceProvider),
-          ),
-          const Divider(),
-          Expanded(
-            flex: 1,
-            child: _buildRecordingsList(context, deviceProvider), // Uses state methods
-          ),
-        ],
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // --- Connection Section ---
+            Consumer<MinimalDeviceProvider>(
+              builder: (context, provider, child) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          provider.connectionState == DeviceConnectionState.connected && provider.connectedDevice != null
+                              ? 'Connected to: ${provider.connectedDevice!.name}'
+                              : provider.isConnecting
+                                ? 'Connecting...'
+                                : provider.isScanning
+                                  ? 'Scanning...'
+                                  : 'Disconnected',
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        // Scan Button
+                        IconButton(
+                          icon: Icon(provider.isScanning ? Icons.bluetooth_searching : Icons.bluetooth),
+                          tooltip: 'Scan for Devices',
+                          onPressed: provider.isScanning || provider.isConnecting
+                              ? null // Disable if scanning or connecting
+                              : () => provider.startScan(),
+                        ),
+                      ],
+                    ),
+                    if (provider.connectionState == DeviceConnectionState.connected && provider.connectedDevice != null)
+                      ElevatedButton.icon(
+                         icon: const Icon(Icons.link_off),
+                         label: const Text('Disconnect'),
+                         onPressed: () => provider.disconnect(),
+                         style: ElevatedButton.styleFrom(backgroundColor: Colors.orange[800]),
+                      ),
+                    const SizedBox(height: 10),
+                    if (provider.discoveredDevices.isNotEmpty && provider.connectionState != DeviceConnectionState.connected)
+                      const Text('Found Devices:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    if (provider.connectionState != DeviceConnectionState.connected)
+                       SizedBox(
+                          height: 100, // Limit height for discovered devices list
+                          child: ListView.builder(
+                              itemCount: provider.discoveredDevices.length,
+                              itemBuilder: (context, index) {
+                                  final device = provider.discoveredDevices[index];
+                                  return ListTile(
+                                      title: Text(device.name.isEmpty ? "(Unknown Device)" : device.name),
+                                      subtitle: Text(device.id),
+                                      trailing: ElevatedButton(
+                                           child: const Text('Connect'),
+                                           onPressed: provider.isConnecting ? null : () => provider.connectToDevice(device.id),
+                                      ),
+                                  );
+                              },
+                          ),
+                       ),
+                  ],
+                );
+              },
+            ),
+            const Divider(height: 30),
+
+            // --- Recording Section ---
+            Consumer<MinimalCaptureProvider>(
+               builder: (context, captureProvider, child) {
+                   // Accessing DeviceProvider to check connection state
+                   final deviceProvider = context.watch<MinimalDeviceProvider>();
+                   return Row(
+                       mainAxisAlignment: MainAxisAlignment.center,
+                       children: [
+                            ElevatedButton.icon(
+                               // Use placeholder icons/text or fetch state differently
+                               icon: Icon(deviceProvider.isRecording ? Icons.stop : Icons.mic),
+                               label: Text(deviceProvider.isRecording ? 'Stop Recording' : 'Start Recording'),
+                               onPressed: deviceProvider.connectionState == DeviceConnectionState.connected
+                                    ? () {
+                                        // We need to call methods on CaptureProvider
+                                        // but the state is on DeviceProvider now
+                                        if (deviceProvider.isRecording) {
+                                            // Need a way to stop, maybe move stop logic to DeviceProvider
+                                            // Or have CaptureProvider expose stop method directly
+                                            captureProvider.stopRecordingAndSave(); // Assumes this method exists
+                                            deviceProvider.setRecordingState(false); // Sync state
+                                        } else {
+                                            captureProvider.startRecording(); // Assumes this method exists
+                                            deviceProvider.setRecordingState(true); // Sync state
+                                        }
+                                      }
+                                    : null, // Disable if not connected
+                               style: ElevatedButton.styleFrom(
+                                  // Use state from DeviceProvider
+                                  backgroundColor: deviceProvider.isRecording ? Colors.red : Colors.green,
+                               ),
+                           ),
+                       ],
+                   );
+               }
+            ),
+            const SizedBox(height: 20),
+            const Text('Saved Recordings:', style: TextStyle(fontWeight: FontWeight.bold)),
+            Expanded(
+              child: Consumer<MinimalDeviceProvider>(
+                builder: (context, provider, child) {
+                  if (provider.savedRecordings.isEmpty) {
+                    return const Center(child: Text('No recordings saved yet.'));
+                  }
+                  return ListView.builder(
+                    itemCount: provider.savedRecordings.length,
+                    itemBuilder: (context, index) {
+                      final filePath = provider.savedRecordings[index];
+                      final fileName = filePath.split('/').last;
+                      return Card(
+                        child: ListTile(
+                          title: Text(fileName),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(icon: const Icon(Icons.play_arrow), tooltip: 'Play', onPressed: () => _playAudio(filePath)),
+                              IconButton(icon: const Icon(Icons.share), tooltip: 'Share', onPressed: () => _shareAudio(filePath)),
+                              IconButton(icon: const Icon(Icons.delete), tooltip: 'Delete', onPressed: () => _deleteAudio(context, filePath)),
+                              // Optional Transcribe Button
+                              // IconButton(icon: Icon(Icons.transcribe), tooltip: 'Transcribe', onPressed: () => _transcribeAudio(filePath)),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            const Divider(height: 30),
+            // --- Firmware Update Section ---
+            const Text('Firmware Update', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            ElevatedButton.icon(
+               icon: const Icon(Icons.file_open),
+               label: const Text('Select Firmware File (.zip)'),
+               onPressed: () async {
+                 FilePickerResult? result = await FilePicker.platform.pickFiles(
+                   type: FileType.custom,
+                   allowedExtensions: ['zip'],
+                 );
+                 if (result != null && result.files.single.path != null) {
+                   setState(() {
+                     _selectedFirmwarePath = result.files.single.path!;
+                   });
+                   print('Selected firmware file: $_selectedFirmwarePath');
+                 } else {
+                   // User canceled the picker
+                 }
+               },
+            ),
+            if (_selectedFirmwarePath != null)
+               Padding(
+                 padding: const EdgeInsets.symmetric(vertical: 8.0),
+                 child: Text('Selected: ${_selectedFirmwarePath!.split('/').last}'),
+               ),
+            const SizedBox(height: 10),
+            Consumer<MinimalDeviceProvider>(
+               builder: (context, provider, child) {
+                  return ElevatedButton.icon(
+                     icon: const Icon(Icons.system_update_alt),
+                     label: const Text('Start Update'),
+                     // Enable only if connected and file selected and not already installing
+                     onPressed: provider.connectionState == DeviceConnectionState.connected && _selectedFirmwarePath != null && !isInstalling
+                       ? () async {
+                           if (provider.connectedDevice == null) return;
+                           try {
+                              // Use MCUmgr flow by default for robustness
+                              await startMCUDfu(provider.connectedDevice!, zipFilePath: _selectedFirmwarePath!);
+                           } catch (e) {
+                             print("Error starting DFU: $e");
+                             ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text("DFU Error: $e"), backgroundColor: Colors.red)
+                             );
+                             // Reset installing state on error
+                             if (mounted) { // Check if widget is still in tree
+                               setState(() { isInstalling = false; });
+                             }
+                           }
+                       } : null,
+                  );
+               }
+            ),
+            // DFU Status Display
+            const SizedBox(height: 10),
+            if (isDownloading) // Although downloadFirmware isn't called here, keep for potential future use
+               Text('Downloading: $downloadProgress%'),
+            if (isInstalling)
+               Column(
+                  children: [
+                     Text('Installing Firmware: $installProgress%'),
+                     const SizedBox(height: 5),
+                     LinearProgressIndicator(value: installProgress / 100),
+                  ],
+               ),
+            if (isInstalled)
+               const Text('Firmware Update Successful!', style: TextStyle(color: Colors.green)),
+
+          ],
+        ),
       ),
-    );
-  }
-
-  // Updated Connection Status to include Record buttons
-  Widget _buildConnectionStatus(BuildContext context, MinimalDeviceProvider deviceProvider, MinimalCaptureProvider captureProvider) {
-    String statusText;
-    List<Widget> actionButtons = [];
-
-    if (deviceProvider.isConnecting) {
-      statusText = 'Connecting to ${deviceProvider.activeConnection?.device.name ?? 'device'}...';
-      actionButtons.add(const CircularProgressIndicator());
-    } else if (deviceProvider.connectionState == DeviceConnectionState.connected) {
-      statusText = 'Connected to ${deviceProvider.connectedDevice?.name ?? 'Omi'}';
-      actionButtons.add(
-          deviceProvider.isRecording
-          ? ElevatedButton.icon(
-              icon: const Icon(Icons.stop),
-              label: const Text('Stop Rec'),
-              onPressed: () => captureProvider.stopRecordingAndSave(),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            )
-          : ElevatedButton.icon(
-              icon: const Icon(Icons.mic),
-              label: const Text('Start Rec'),
-              onPressed: () => captureProvider.startRecording(),
-            )
-      );
-      actionButtons.add(const SizedBox(width: 8)); // Spacing
-      actionButtons.add(ElevatedButton(
-        onPressed: () => deviceProvider.disconnect(),
-        child: const Text('Disconnect'),
-      ));
-    } else { // Disconnected
-      statusText = 'Disconnected';
-      actionButtons.add(ElevatedButton(
-        onPressed: deviceProvider.isScanning ? null : () => deviceProvider.startScan(),
-        child: Text(deviceProvider.isScanning ? 'Scanning...' : 'Scan'),
-      ));
-    }
-
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column( // Use Column for better layout with multiple buttons
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(statusText, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Row( // Keep buttons in a row
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: actionButtons,
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Helper widget for Device List
-  Widget _buildDeviceList(BuildContext context, MinimalDeviceProvider provider) {
-    if (provider.isScanning && provider.discoveredDevices.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (provider.discoveredDevices.isEmpty) {
-      return const Center(child: Text('No devices found. Press Scan.'));
-    }
-
-    return ListView.builder(
-      itemCount: provider.discoveredDevices.length,
-      itemBuilder: (context, index) {
-        final device = provider.discoveredDevices[index];
-        final isConnectingToThis = provider.isConnecting && provider.activeConnection?.device.id == device.id;
-        final bool canConnect = provider.connectionState == DeviceConnectionState.disconnected && !provider.isConnecting;
-
-        return ListTile(
-          leading: isConnectingToThis ? const CircularProgressIndicator() : const Icon(Icons.bluetooth),
-          title: Text(device.name.isNotEmpty ? device.name : 'Unknown Device'),
-          subtitle: Text(device.id),
-          trailing: Text('${device.rssi} dBm'),
-          onTap: canConnect ? () => provider.connectToDevice(device.id) : null,
-          enabled: canConnect,
-        );
-      },
-    );
-  }
-
-  // Updated Recordings List to use action handlers
-  Widget _buildRecordingsList(BuildContext context, MinimalDeviceProvider provider) {
-    if (provider.savedRecordings.isEmpty) {
-      return const Center(child: Text('No recordings yet. Start one when connected.'));
-    }
-
-    return ListView.builder(
-      itemCount: provider.savedRecordings.length,
-      itemBuilder: (context, index) {
-        final filePath = provider.savedRecordings[index];
-        final fileName = filePath.split('/').last;
-
-        return ListTile(
-          leading: const Icon(Icons.audiotrack),
-          title: Text(fileName),
-          // subtitle: Text(filePath), // Maybe hide full path
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(icon: const Icon(Icons.play_arrow), tooltip: 'Play', onPressed: () => _playAudio(filePath)),
-              IconButton(icon: const Icon(Icons.share), tooltip: 'Share', onPressed: () => _shareAudio(filePath)),
-              IconButton(icon: const Icon(Icons.delete), tooltip: 'Delete', onPressed: () => _deleteAudio(context, filePath)),
-              // Optional Transcribe Button
-              // IconButton(icon: Icon(Icons.transcribe), tooltip: 'Transcribe', onPressed: () => _transcribeAudio(filePath)),
-            ],
-          ),
-        );
-      },
     );
   }
 }

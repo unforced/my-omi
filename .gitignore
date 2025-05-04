@@ -31,6 +31,12 @@ migrate_working_dir/
 .pub/
 /build/
 
+# Firmware build artifacts
+firmware/build/
+firmware/**/build/
+firmware/zephyr/
+firmware/.zephyr/
+
 # Symbolication related
 app.*.symbols
 

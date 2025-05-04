@@ -13,8 +13,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:omi_minimal_fork/utils/audio/wav_bytes.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 
 const String _lastConnectedDeviceIdKey = 'last_connected_omi_id';
+
+// UUIDs for Legacy DFU Trigger
+final fbp.Guid _legacyDfuServiceGuid = fbp.Guid("00001530-1212-EFDE-1523-785FEABCD123");
+final fbp.Guid _legacyDfuControlPointGuid = fbp.Guid("00001531-1212-EFDE-1523-785FEABCD123");
 
 class MinimalDeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption {
   final IDeviceService _deviceService = ServiceManager.instance().device;
@@ -112,6 +117,88 @@ class MinimalDeviceProvider extends ChangeNotifier implements IDeviceServiceSubs
      }
      await _clearLastConnectedDevice(); 
   }
+
+  // --- Add prepareDFU method ---
+  Future<void> prepareDFU() async {
+    if (activeConnection == null) {
+      debugPrint("[DeviceProvider] Cannot prepare DFU: No active connection.");
+      throw Exception("Device not connected");
+    }
+
+    final device = activeConnection!.bleDevice;
+    final deviceId = device.remoteId.toString();
+    debugPrint("[DeviceProvider] Preparing DFU for device: $deviceId");
+
+    try {
+      // Optional: Disconnect gracefully first? Original app did this.
+      // await disconnect(); 
+      // await Future.delayed(const Duration(milliseconds: 500)); // Small delay after disconnect
+
+      // Ensure device is connected before service discovery (if not disconnected above)
+      // Note: This might reconnect if disconnect() was called. Adjust logic as needed.
+      // If disconnect() is used, remove this connect block.
+      if (device.connectionState != fbp.BluetoothConnectionState.connected) {
+         debugPrint("[DeviceProvider] Reconnecting for DFU trigger..."); 
+         await device.connect(autoConnect: false, timeout: Duration(seconds: 10));
+         debugPrint("[DeviceProvider] Reconnected for DFU trigger.");
+      }
+      
+      debugPrint("[DeviceProvider] Discovering services for DFU...");
+      List<fbp.BluetoothService> services = await device.discoverServices();
+      debugPrint("[DeviceProvider] Found ${services.length} services.");
+
+      fbp.BluetoothService? dfuService;
+      for (var s in services) {
+          if (s.uuid == _legacyDfuServiceGuid) {
+              dfuService = s;
+              debugPrint("[DeviceProvider] Found Legacy DFU Service: ${dfuService.uuid}");
+              break;
+          }
+      }
+
+      if (dfuService == null) {
+        debugPrint("[DeviceProvider] Error: Legacy DFU Service not found.");
+        throw Exception("Legacy DFU Service not found");
+      }
+
+      fbp.BluetoothCharacteristic? controlPoint;
+      for (var c in dfuService.characteristics) {
+          if (c.uuid == _legacyDfuControlPointGuid) {
+              controlPoint = c;
+              debugPrint("[DeviceProvider] Found DFU Control Point Characteristic: ${controlPoint.uuid}");
+              break;
+          }
+      }
+
+      if (controlPoint == null) {
+        debugPrint("[DeviceProvider] Error: DFU Control Point Characteristic not found.");
+        throw Exception("DFU Control Point Characteristic not found");
+      }
+
+      debugPrint("[DeviceProvider] Writing DFU trigger command [0x01]...");
+      // Command [0x01] seems commonly used with nordic_dfu/mcumgr combo
+      // The firmware code shows handling for [0x01] and [0x06]
+      await controlPoint.write([0x01], withoutResponse: false); 
+      debugPrint("[DeviceProvider] DFU trigger command sent. Device should reset to DFU mode.");
+
+      // Device will likely disconnect automatically after the write triggers reset.
+      // Manually update state if needed, or rely on onDeviceConnectionStateChanged.
+      // connectionState = DeviceConnectionState.disconnected;
+      // connectedDevice = null;
+      // activeConnection = null;
+      // notifyListeners();
+
+    } on TimeoutException catch (e) {
+       debugPrint("[DeviceProvider] Timeout during DFU preparation for $deviceId: $e");
+       // Handle timeout (e.g., inform user)
+       throw Exception("Timeout preparing device for update");
+    } catch (e) {
+      debugPrint("[DeviceProvider] Error preparing DFU for $deviceId: $e");
+      // Handle other errors
+      throw Exception("Failed to prepare device for update: $e");
+    }
+  }
+  // --- End of prepareDFU method ---
 
   void setRecordingState(bool recording) {
       if (isRecording == recording) return;
