@@ -15,6 +15,7 @@ import 'package:http/http.dart' as http;
 import 'package:mcumgr_flutter/mcumgr_flutter.dart' as mcumgr;
 import 'package:flutter_archive/flutter_archive.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 mixin FirmwareMixin<T extends StatefulWidget> on State<T> {
   Map latestFirmwareDetails = {};
@@ -24,7 +25,7 @@ mixin FirmwareMixin<T extends StatefulWidget> on State<T> {
   bool isInstalling = false;
   bool isInstalled = false;
   int installProgress = 1;
-  bool isLegacySecureDFU = true;
+  bool isLegacySecureDFU = true; // Use Legacy DFU for current firmware format
   List<String> otaUpdateSteps = [];
   final mcumgr.FirmwareUpdateManagerFactory? managerFactory = mcumgr.FirmwareUpdateManagerFactory();
 
@@ -32,22 +33,33 @@ mixin FirmwareMixin<T extends StatefulWidget> on State<T> {
     return processZipFile(zipData);
   }
 
-  Future<void> startDfu(BtDevice btDevice, {bool fileInAssets = false, String? zipFilePath}) async {
+  Future<void> startDfu(BtDevice btDevice, {bool fileInAssets = false, String? zipFilePath, String? assetPath}) async {
     if (isLegacySecureDFU) {
-      return startLegacyDfu(btDevice, fileInAssets: fileInAssets);
+      return startLegacyDfu(btDevice, fileInAssets: fileInAssets, assetPath: assetPath);
     }
-    return startMCUDfu(btDevice, fileInAssets: fileInAssets, zipFilePath: zipFilePath);
+    return startMCUDfu(btDevice, fileInAssets: fileInAssets, zipFilePath: zipFilePath, assetPath: assetPath);
   }
 
-  Future<void> startMCUDfu(BtDevice btDevice, {bool fileInAssets = false, String? zipFilePath}) async {
+  Future<void> startMCUDfu(BtDevice btDevice, {bool fileInAssets = false, String? zipFilePath, String? assetPath}) async {
     setState(() {
       isInstalling = true;
     });
     await Provider.of<MinimalDeviceProvider>(context, listen: false).prepareDFU();
     await Future.delayed(const Duration(seconds: 2));
 
-    String firmwareFile = zipFilePath ?? '${(await getApplicationDocumentsDirectory()).path}/firmware.zip';
-    final bytes = await File(firmwareFile).readAsBytes();
+    Uint8List bytes;
+    if (fileInAssets && assetPath != null) {
+      // Load firmware from assets
+      final ByteData data = await rootBundle.load(assetPath);
+      bytes = data.buffer.asUint8List();
+    } else if (zipFilePath != null) {
+      // Load firmware from file path
+      bytes = await File(zipFilePath).readAsBytes();
+    } else {
+      // Default to downloaded firmware
+      String firmwareFile = '${(await getApplicationDocumentsDirectory()).path}/firmware.zip';
+      bytes = await File(firmwareFile).readAsBytes();
+    }
     const configuration = mcumgr.FirmwareUpgradeConfiguration(
       estimatedSwapTime: Duration(seconds: 0),
       eraseAppSettings: true,
@@ -92,18 +104,32 @@ mixin FirmwareMixin<T extends StatefulWidget> on State<T> {
     );
   }
 
-  Future<void> startLegacyDfu(BtDevice btDevice, {bool fileInAssets = false}) async {
+  Future<void> startLegacyDfu(BtDevice btDevice, {bool fileInAssets = false, String? assetPath}) async {
     setState(() {
       isInstalling = true;
     });
     await Provider.of<MinimalDeviceProvider>(context, listen: false).prepareDFU();
     await Future.delayed(const Duration(seconds: 2));
-    String firmwareFile = '${(await getApplicationDocumentsDirectory()).path}/firmware.zip';
+    
+    String firmwareFile;
+    if (fileInAssets && assetPath != null) {
+      // For assets, we need to copy to a temporary file first for Nordic DFU
+      final ByteData data = await rootBundle.load(assetPath);
+      final Directory tempDir = await getTemporaryDirectory();
+      firmwareFile = '${tempDir.path}/temp_firmware.zip';
+      final File tempFile = File(firmwareFile);
+      await tempFile.writeAsBytes(data.buffer.asUint8List());
+      debugPrint('Created temporary firmware file: $firmwareFile');
+      debugPrint('File exists: ${await tempFile.exists()}');
+      debugPrint('File size: ${await tempFile.length()} bytes');
+    } else {
+      firmwareFile = '${(await getApplicationDocumentsDirectory()).path}/firmware.zip';
+    }
     NordicDfu dfu = NordicDfu();
     await dfu.startDfu(
       btDevice.id,
       firmwareFile,
-      fileInAsset: fileInAssets,
+      fileInAsset: false, // Always false since we handle asset loading ourselves
       numberOfPackets: 8,
       enableUnsafeExperimentalButtonlessServiceInSecureDfu: true,
       iosSpecialParameter: const IosSpecialParameter(

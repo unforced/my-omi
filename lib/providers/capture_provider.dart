@@ -21,6 +21,9 @@ class MinimalCaptureProvider extends ChangeNotifier {
   bool _loggedFirstBytes = false;
   bool _isRecording = false; // Added recording state flag
   int _frameCount = 0; // Added frame counter for logging
+  
+  // Button event callback
+  void Function(String)? onButtonEvent;
 
   // Method called by MinimalDeviceProvider when connection state changes
   void setActiveConnection(DeviceConnection? connection) {
@@ -64,8 +67,8 @@ class MinimalCaptureProvider extends ChangeNotifier {
       // Start listening to audio bytes only after initialization
       _startAudioStream(connection);
 
-      // Optional: Start listening to button presses
-      // _startButtonStream(connection);
+      // Start listening to button presses
+      _startButtonStream(connection);
     } catch (e, stackTrace) {
         debugPrint("[CaptureProvider] Error during initialization: $e\n$stackTrace");
         // Handle initialization failure (e.g., notify UI, disconnect)
@@ -130,9 +133,63 @@ class MinimalCaptureProvider extends ChangeNotifier {
     }
   }
 
-  void _startButtonStream(DeviceConnection connection) {
-      // Optional: Implement button listener similar to audio stream
-      // Use connection.performGetBleButtonListener
+  void _startButtonStream(DeviceConnection connection) async {
+    debugPrint("[CaptureProvider] Setting up button stream...");
+    _buttonSubscription?.cancel();
+    try {
+      _buttonSubscription = await connection.performGetBleButtonListener(
+        onButtonReceived: (bytes) {
+          if (bytes.length >= 2) {
+            int buttonEvent = bytes[0];
+            debugPrint("[CaptureProvider] Button event received: $buttonEvent");
+            
+            String eventName = "";
+            switch (buttonEvent) {
+              case 1: // SINGLE_TAP - Toggle recording
+                eventName = "Single Tap";
+                debugPrint("[CaptureProvider] Single tap detected - toggling recording");
+                if (_isRecording) {
+                  stopRecordingAndSave();
+                } else {
+                  startRecording();
+                }
+                break;
+              case 2: // DOUBLE_TAP
+                eventName = "Double Tap";
+                debugPrint("[CaptureProvider] Double tap detected");
+                // TODO: Add custom action for double tap
+                break;
+              case 3: // TRIPLE_TAP  
+                eventName = "Triple Tap";
+                debugPrint("[CaptureProvider] Triple tap detected");
+                // TODO: Add custom action for triple tap
+                break;
+              case 4: // LONG_TAP (Long press)
+                eventName = "Long Press";
+                debugPrint("[CaptureProvider] Long press detected - device will power off");
+                // Device handles power off in firmware
+                break;
+              case 5: // BUTTON_PRESS
+                eventName = "Button Down";
+                debugPrint("[CaptureProvider] Button pressed down");
+                break;
+              case 6: // BUTTON_RELEASE
+                eventName = "Button Up";
+                debugPrint("[CaptureProvider] Button released");
+                break;
+            }
+            
+            // Notify UI about button event
+            if (eventName.isNotEmpty && onButtonEvent != null) {
+              onButtonEvent!(eventName);
+            }
+          }
+        },
+      );
+      debugPrint("[CaptureProvider] Button stream subscription established");
+    } catch (e) {
+      debugPrint("[CaptureProvider] Error setting up button stream: $e");
+    }
   }
 
   // --- Recording Control --- 

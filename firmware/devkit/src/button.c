@@ -78,9 +78,10 @@ K_WORK_DELAYABLE_DEFINE(button_work, check_button_level);
 #define DEFAULT_STATE 0
 #define SINGLE_TAP 1
 #define DOUBLE_TAP 2
-#define LONG_TAP 3
-#define BUTTON_PRESS 4
-#define BUTTON_RELEASE 5
+#define TRIPLE_TAP 3
+#define LONG_TAP 4
+#define BUTTON_PRESS 5
+#define BUTTON_RELEASE 6
 
 // 4 is button down, 5 is button up
 static FSM_STATE_T current_button_state = IDLE;
@@ -150,17 +151,30 @@ static inline void notify_long_tap()
     }
 }
 
+static inline void notify_triple_tap() 
+{
+    final_button_state[0] = TRIPLE_TAP;
+    LOG_INF("Button triple tap");
+    struct bt_conn *conn = get_current_connection();
+    if (conn != NULL)
+    { 
+        bt_gatt_notify(conn, &button_service.attrs[1], &final_button_state, sizeof(final_button_state));
+    }
+}
+
 #define BUTTON_PRESSED     1
 #define BUTTON_RELEASED    0
 
 #define TAP_THRESHOLD      300  // 300 ms for single tap
 #define DOUBLE_TAP_WINDOW  600  // 600 ms maximum for double-tap
+#define TRIPLE_TAP_WINDOW  900  // 900 ms maximum for triple-tap
 #define LONG_PRESS_TIME    1000 // 1000 ms for long press
 
 typedef enum {
     BUTTON_EVENT_NONE,
     BUTTON_EVENT_SINGLE_TAP,
     BUTTON_EVENT_DOUBLE_TAP,
+    BUTTON_EVENT_TRIPLE_TAP,
     BUTTON_EVENT_LONG_PRESS,
     BUTTON_EVENT_RELEASE
 } ButtonEvent;
@@ -169,7 +183,9 @@ static uint32_t current_time = 0;
 static uint32_t btn_press_start_time;
 static uint32_t btn_release_time;
 static uint32_t btn_last_tap_time;
+static uint32_t btn_second_tap_time;
 static bool btn_is_pressed;
+static uint8_t tap_count = 0;
 
 static u_int8_t btn_last_event = BUTTON_EVENT_NONE;
 
@@ -189,26 +205,35 @@ void check_button_level(struct k_work *work_item)
         btn_is_pressed = false;
         btn_release_time = current_time;
 
-        // Check for double tap
+        // Check if this was a tap (short press)
         uint32_t press_duration = (btn_release_time - btn_press_start_time)*BUTTON_CHECK_INTERVAL;
         if (press_duration < TAP_THRESHOLD) {
-            if (btn_last_tap_time > 0 && (current_time - btn_last_tap_time)*BUTTON_CHECK_INTERVAL < DOUBLE_TAP_WINDOW) {
-                event = BUTTON_EVENT_DOUBLE_TAP;
-                btn_last_tap_time = 0; // Reset double-tap / single-tap detection
-            } else {
+            tap_count++;
+            
+            if (tap_count == 1) {
                 btn_last_tap_time = current_time;
+            } else if (tap_count == 2) {
+                btn_second_tap_time = current_time;
             }
         }
-    } 
+    }
 
-    // Check for single tap
-    if (btn_state == BUTTON_RELEASED && !btn_is_pressed) {
-        uint32_t press_duration = (btn_release_time - btn_press_start_time)*BUTTON_CHECK_INTERVAL;
-        if (press_duration < TAP_THRESHOLD && btn_last_tap_time > 0 && (current_time - btn_press_start_time)*BUTTON_CHECK_INTERVAL > TAP_THRESHOLD) {
+    // Check for tap timeout and determine tap type
+    if (tap_count > 0 && !btn_is_pressed) {
+        uint32_t time_since_first_tap = (current_time - btn_last_tap_time) * BUTTON_CHECK_INTERVAL;
+        
+        if (tap_count == 1 && time_since_first_tap > DOUBLE_TAP_WINDOW) {
             event = BUTTON_EVENT_SINGLE_TAP;
-            btn_last_tap_time = 0;
-        } else if ((current_time - btn_press_start_time)*BUTTON_CHECK_INTERVAL > TAP_THRESHOLD) {
-            event = BUTTON_EVENT_RELEASE;
+            tap_count = 0;
+        } else if (tap_count == 2) {
+            uint32_t time_since_second_tap = (current_time - btn_second_tap_time) * BUTTON_CHECK_INTERVAL;
+            if (time_since_second_tap > TAP_THRESHOLD) {
+                event = BUTTON_EVENT_DOUBLE_TAP;
+                tap_count = 0;
+            }
+        } else if (tap_count >= 3) {
+            event = BUTTON_EVENT_TRIPLE_TAP;
+            tap_count = 0;
         }
     }
 
@@ -217,17 +242,26 @@ void check_button_level(struct k_work *work_item)
         event = BUTTON_EVENT_LONG_PRESS;
     }
 
-    // Single tap
+    // Single tap - Toggle recording
     if (event == BUTTON_EVENT_SINGLE_TAP)
     {
-        LOG_PRINTK("single tap detected\n");
+        LOG_PRINTK("single tap detected - toggling recording\n");
         btn_last_event = event;
         notify_tap();
 
-        // Enter the low power mode
-        is_off = true;
-        bt_off();
-        turnoff_all();
+        // Toggle recording state
+        static bool is_recording = false;
+        is_recording = !is_recording;
+        
+        if (is_recording) {
+            LOG_INF("Starting recording");
+            mic_on();
+            set_led_red(true);  // Red LED indicates recording
+        } else {
+            LOG_INF("Stopping recording");
+            mic_off();
+            set_led_red(false);
+        }
     }
 
     // Double tap
@@ -238,12 +272,29 @@ void check_button_level(struct k_work *work_item)
         notify_double_tap();
     }
 
-    // Long press, one time event
+    // Triple tap
+    if (event == BUTTON_EVENT_TRIPLE_TAP)
+    {
+        LOG_PRINTK("triple tap detected\n");
+        btn_last_event = event;
+        notify_triple_tap();
+        
+        // Triple tap action - could be used for special mode
+        LOG_INF("Triple tap - special mode activated");
+        // Add your special mode logic here
+    }
+
+    // Long press - Power off
     if (event == BUTTON_EVENT_LONG_PRESS && btn_last_event != BUTTON_EVENT_LONG_PRESS)
     {
-        LOG_PRINTK("long press detected\n");
+        LOG_PRINTK("long press detected - powering off\n");
         btn_last_event = event;
         notify_long_tap();
+        
+        // Enter the low power mode
+        is_off = true;
+        bt_off();
+        turnoff_all();
     }
 
     // Releases, one time event
@@ -258,6 +309,8 @@ void check_button_level(struct k_work *work_item)
         btn_press_start_time = 0;
         btn_release_time = 0;
         btn_last_tap_time = 0;
+        btn_second_tap_time = 0;
+        tap_count = 0;
     }
     if (event == BUTTON_EVENT_RELEASE)
     {

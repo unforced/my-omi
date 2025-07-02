@@ -192,11 +192,98 @@ class HomePage extends StatefulWidget { // Change to StatefulWidget
 class _HomePageState extends State<HomePage> with FirmwareMixin<HomePage> { // Create State and add Mixin
   final AudioPlayer _audioPlayer = AudioPlayer(); // Audio player instance
   String? _selectedFirmwarePath;
+  String? _currentFirmwareVersion;
+  String? _bundledFirmwareVersion = "2.0.10"; // Version of the bundled firmware
+  bool _firmwareUpdateAvailable = false;
+  String? _lastButtonEvent; // Track last button event for UI display
+  DateTime? _lastButtonEventTime;
+
+  @override
+  void initState() {
+    super.initState();
+    // Check firmware version when connected
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = Provider.of<MinimalDeviceProvider>(context, listen: false);
+      if (provider.connectionState == DeviceConnectionState.connected) {
+        _checkFirmwareVersion();
+      }
+    });
+    
+    // Listen for button events from capture provider
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupButtonEventListener();
+    });
+  }
+  
+  void _setupButtonEventListener() {
+    final captureProvider = Provider.of<MinimalCaptureProvider>(context, listen: false);
+    captureProvider.onButtonEvent = (String eventName) {
+      _updateButtonEvent(eventName);
+    };
+  }
+  
+  void _updateButtonEvent(String eventName) {
+    setState(() {
+      _lastButtonEvent = eventName;
+      _lastButtonEventTime = DateTime.now();
+    });
+    
+    // Auto-clear the event after 2 seconds
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted && _lastButtonEventTime != null && 
+          DateTime.now().difference(_lastButtonEventTime!).inSeconds >= 2) {
+        setState(() {
+          _lastButtonEvent = null;
+        });
+      }
+    });
+  }
 
   @override
   void dispose() {
     _audioPlayer.dispose(); // Dispose player
     super.dispose();
+  }
+
+  Future<void> _checkFirmwareVersion() async {
+    try {
+      final provider = Provider.of<MinimalDeviceProvider>(context, listen: false);
+      if (provider.connectedDevice == null || provider.activeConnection == null) return;
+      
+      // Get firmware version from device using Device Information Service
+      const String deviceInfoServiceUuid = '0000180a-0000-1000-8000-00805f9b34fb';
+      const String firmwareRevisionCharUuid = '00002a26-0000-1000-8000-00805f9b34fb';
+      
+      final service = await provider.activeConnection!.getService(deviceInfoServiceUuid);
+      if (service != null) {
+        final characteristic = provider.activeConnection!.getCharacteristic(service, firmwareRevisionCharUuid);
+        if (characteristic != null) {
+          final bytes = await characteristic.read();
+          String version = String.fromCharCodes(bytes).trim();
+          debugPrint('Device firmware version: "$version"');
+          
+          // Clean up version string - remove any non-printable characters
+          version = version.replaceAll(RegExp(r'[\x00-\x1F\x7F-\x9F]'), '');
+          
+          // If the device reports an old version like 1.0.0, suggest update
+          if (version == '1.0.0' || version == '1.0.2') {
+            debugPrint('Device is running old firmware version: $version');
+          }
+          
+          setState(() {
+            _currentFirmwareVersion = version;
+            _firmwareUpdateAvailable = _currentFirmwareVersion != _bundledFirmwareVersion;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error reading firmware version: $e');
+      // Fall back to unknown version
+      setState(() {
+        _currentFirmwareVersion = "Unknown";
+        _firmwareUpdateAvailable = true; // Suggest update if we can't read version
+      });
+    }
   }
 
   // --- Button Action Handlers --- 
@@ -275,6 +362,13 @@ class _HomePageState extends State<HomePage> with FirmwareMixin<HomePage> { // C
     // Access providers within build method
     final deviceProvider = Provider.of<MinimalDeviceProvider>(context);
     final captureProvider = Provider.of<MinimalCaptureProvider>(context, listen: false); // Typically don't listen for actions
+    
+    // Check firmware version when device connects
+    if (deviceProvider.connectionState == DeviceConnectionState.connected && _currentFirmwareVersion == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _checkFirmwareVersion();
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -357,6 +451,29 @@ class _HomePageState extends State<HomePage> with FirmwareMixin<HomePage> { // C
               },
             ),
             const Divider(height: 30),
+            
+            // --- Button Event Indicator ---
+            if (_lastButtonEvent != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.touch_app, color: Colors.blue),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Button Event: $_lastButtonEvent',
+                      style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
 
             // --- Recording Section ---
             Consumer<MinimalCaptureProvider>(
@@ -431,53 +548,109 @@ class _HomePageState extends State<HomePage> with FirmwareMixin<HomePage> { // C
             // --- Firmware Update Section ---
             const Text('Firmware Update', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
-            ElevatedButton.icon(
-               icon: const Icon(Icons.file_open),
-               label: const Text('Select Firmware File (.zip)'),
-               onPressed: () async {
-                 FilePickerResult? result = await FilePicker.platform.pickFiles(
-                   type: FileType.custom,
-                   allowedExtensions: ['zip'],
-                 );
-                 if (result != null && result.files.single.path != null) {
-                   setState(() {
-                     _selectedFirmwarePath = result.files.single.path!;
-                   });
-                   print('Selected firmware file: $_selectedFirmwarePath');
-                 } else {
-                   // User canceled the picker
-                 }
-               },
-            ),
-            if (_selectedFirmwarePath != null)
-               Padding(
-                 padding: const EdgeInsets.symmetric(vertical: 8.0),
-                 child: Text('Selected: ${_selectedFirmwarePath!.split('/').last}'),
-               ),
+            // Version information
+            if (_currentFirmwareVersion != null)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Current version: $_currentFirmwareVersion'),
+                          if (_firmwareUpdateAvailable)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.orange,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Text('Update available', style: TextStyle(fontSize: 12)),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text('Latest version: $_bundledFirmwareVersion', 
+                        style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ),
             const SizedBox(height: 10),
             Consumer<MinimalDeviceProvider>(
                builder: (context, provider, child) {
-                  return ElevatedButton.icon(
-                     icon: const Icon(Icons.system_update_alt),
-                     label: const Text('Start Update'),
-                     // Enable only if connected and file selected and not already installing
-                     onPressed: provider.connectionState == DeviceConnectionState.connected && _selectedFirmwarePath != null && !isInstalling
-                       ? () async {
-                           if (provider.connectedDevice == null) return;
-                           try {
-                              // Use MCUmgr flow by default for robustness
-                              await startMCUDfu(provider.connectedDevice!, zipFilePath: _selectedFirmwarePath!);
-                           } catch (e) {
-                             print("Error starting DFU: $e");
-                             ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text("DFU Error: $e"), backgroundColor: Colors.red)
-                             );
-                             // Reset installing state on error
-                             if (mounted) { // Check if widget is still in tree
-                               setState(() { isInstalling = false; });
-                             }
-                           }
-                       } : null,
+                  final bool canUpdate = provider.connectionState == DeviceConnectionState.connected && !isInstalling;
+                  
+                  return Column(
+                    children: [
+                      // Automatic update with bundled firmware
+                      ElevatedButton.icon(
+                         icon: Icon(_firmwareUpdateAvailable ? Icons.update : Icons.system_update_alt),
+                         label: Text(_firmwareUpdateAvailable ? 'Install Update' : 'Reinstall Firmware'),
+                         style: ElevatedButton.styleFrom(
+                           backgroundColor: canUpdate ? (_firmwareUpdateAvailable ? Colors.orange : Colors.blue) : null,
+                         ),
+                         onPressed: canUpdate
+                           ? () async {
+                               if (provider.connectedDevice == null) return;
+                               try {
+                                  // Use bundled firmware from assets
+                                  await startDfu(
+                                    provider.connectedDevice!, 
+                                    fileInAssets: true,
+                                    assetPath: 'assets/firmware/devkit-v2-firmware.zip'
+                                  );
+                               } catch (e) {
+                                 print("Error starting DFU: $e");
+                                 ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text("DFU Error: $e"), backgroundColor: Colors.red)
+                                 );
+                                 // Reset installing state on error
+                                 if (mounted) {
+                                   setState(() { isInstalling = false; });
+                                 }
+                               }
+                           } : null,
+                      ),
+                      const SizedBox(height: 10),
+                      // Optional: Manual file selection for advanced users
+                      TextButton.icon(
+                        icon: const Icon(Icons.file_open, size: 18),
+                        label: const Text('Select custom firmware', style: TextStyle(fontSize: 12)),
+                        onPressed: canUpdate ? () async {
+                          FilePickerResult? result = await FilePicker.platform.pickFiles(
+                            type: FileType.custom,
+                            allowedExtensions: ['zip'],
+                          );
+                          if (result != null && result.files.single.path != null) {
+                            setState(() {
+                              _selectedFirmwarePath = result.files.single.path!;
+                            });
+                            if (provider.connectedDevice != null) {
+                              try {
+                                await startMCUDfu(provider.connectedDevice!, zipFilePath: _selectedFirmwarePath!);
+                              } catch (e) {
+                                print("Error starting DFU: $e");
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                   SnackBar(content: Text("DFU Error: $e"), backgroundColor: Colors.red)
+                                );
+                                if (mounted) {
+                                  setState(() { isInstalling = false; });
+                                }
+                              }
+                            }
+                          }
+                        } : null,
+                      ),
+                      if (_selectedFirmwarePath != null)
+                         Padding(
+                           padding: const EdgeInsets.only(top: 4.0),
+                           child: Text('Custom: ${_selectedFirmwarePath!.split('/').last}', 
+                             style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                         ),
+                    ],
                   );
                }
             ),
