@@ -34,6 +34,9 @@ migrate_working_dir/
 # Firmware build artifacts
 firmware/build/
 firmware/**/build/
+firmware/bootloader/mcuboot/
+firmware/v2.7.0/
+firmware/zephyr-sdk-*/
 firmware/zephyr/
 firmware/.zephyr/
 

@@ -12,6 +12,12 @@ import 'package:path_provider/path_provider.dart'; // Added
 import 'package:intl/intl.dart'; // Added for timestamp filenames
 import 'package:omi_minimal_fork/main.dart'; // Import MyApp for navigatorKey
 
+enum RecordingMode {
+  standard,   // Single tap - normal recording
+  aiQuery,    // Double tap - AI query
+  knowledge,  // Triple tap - knowledge capture
+}
+
 class MinimalCaptureProvider extends ChangeNotifier {
   DeviceConnection? _activeConnection;
   StreamSubscription? _audioBytesSubscription;
@@ -21,6 +27,7 @@ class MinimalCaptureProvider extends ChangeNotifier {
   bool _loggedFirstBytes = false;
   bool _isRecording = false; // Added recording state flag
   int _frameCount = 0; // Added frame counter for logging
+  RecordingMode _currentMode = RecordingMode.standard;
   
   // Button event callback
   void Function(String)? onButtonEvent;
@@ -144,25 +151,38 @@ class MinimalCaptureProvider extends ChangeNotifier {
             debugPrint("[CaptureProvider] Button event received: $buttonEvent");
             
             String eventName = "";
+            RecordingMode mode = RecordingMode.standard;
+            
             switch (buttonEvent) {
-              case 1: // SINGLE_TAP - Toggle recording
+              case 1: // SINGLE_TAP - Standard recording
                 eventName = "Single Tap";
-                debugPrint("[CaptureProvider] Single tap detected - toggling recording");
+                mode = RecordingMode.standard;
+                debugPrint("[CaptureProvider] Single tap detected - standard recording");
                 if (_isRecording) {
-                  stopRecordingAndSave();
+                  stopRecordingAndSave(mode: mode);
                 } else {
-                  startRecording();
+                  startRecording(mode: mode);
                 }
                 break;
-              case 2: // DOUBLE_TAP
-                eventName = "Double Tap";
-                debugPrint("[CaptureProvider] Double tap detected");
-                // TODO: Add custom action for double tap
+              case 2: // DOUBLE_TAP - AI Query
+                eventName = "Double Tap - AI Query";
+                mode = RecordingMode.aiQuery;
+                debugPrint("[CaptureProvider] Double tap detected - AI query mode");
+                if (_isRecording) {
+                  stopRecordingAndSave(mode: mode);
+                } else {
+                  startRecording(mode: mode);
+                }
                 break;
-              case 3: // TRIPLE_TAP  
-                eventName = "Triple Tap";
-                debugPrint("[CaptureProvider] Triple tap detected");
-                // TODO: Add custom action for triple tap
+              case 3: // TRIPLE_TAP - Knowledge Capture
+                eventName = "Triple Tap - Knowledge";
+                mode = RecordingMode.knowledge;
+                debugPrint("[CaptureProvider] Triple tap detected - knowledge capture mode");
+                if (_isRecording) {
+                  stopRecordingAndSave(mode: mode);
+                } else {
+                  startRecording(mode: mode);
+                }
                 break;
               case 4: // LONG_TAP (Long press)
                 eventName = "Long Press";
@@ -194,19 +214,21 @@ class MinimalCaptureProvider extends ChangeNotifier {
 
   // --- Recording Control --- 
 
-  void startRecording() {
+  void startRecording({RecordingMode mode = RecordingMode.standard}) {
     if (_activeConnection == null || _isRecording) return;
-    debugPrint("[CaptureProvider] Starting recording..."); 
+    debugPrint("[CaptureProvider] Starting recording in mode: $mode"); 
     _isRecording = true;
+    _currentMode = mode;
     _frameCount = 0; 
     // Notify DeviceProvider to update its state
     _notifyDeviceProviderRecordingState(true);
     notifyListeners(); // Notify local listeners if any
   }
 
-  Future<void> stopRecordingAndSave() async {
+  Future<void> stopRecordingAndSave({RecordingMode? mode}) async {
     if (!_isRecording) return;
-    debugPrint("[CaptureProvider] Stopping recording. Total packets processed while recording: $_frameCount"); 
+    mode ??= _currentMode;
+    debugPrint("[CaptureProvider] Stopping recording. Mode: $mode, Total packets: $_frameCount"); 
     _isRecording = false;
     _notifyDeviceProviderRecordingState(false);
 
@@ -252,17 +274,20 @@ class MinimalCaptureProvider extends ChangeNotifier {
          debugPrint("[CaptureProvider] Error: createWavByCodec failed or returned empty path.");
       } else {
           debugPrint("[CaptureProvider] Recording saved successfully: $filePath");
-          // Notify DeviceProvider to update the UI list
-          final context = MyApp.navigatorKey.currentContext;
-          if (context != null && context.mounted) {
-              try {
-                  Provider.of<MinimalDeviceProvider>(context, listen: false).addRecording(filePath);
-                  debugPrint("[CaptureProvider] Notified DeviceProvider to add recording.");
-              } catch (e) {
-                  debugPrint("[CaptureProvider] Error notifying DeviceProvider: $e");
-              }
-          } else {
-              debugPrint("[CaptureProvider] Could not notify DeviceProvider: Context not available.");
+          
+          // Handle based on mode
+          switch (mode) {
+            case RecordingMode.aiQuery:
+              await _handleAIQuery(filePath);
+              break;
+            case RecordingMode.knowledge:
+              await _handleKnowledgeCapture(filePath);
+              break;
+            case RecordingMode.standard:
+            default:
+              // Standard recording - just save to list
+              _notifyDeviceProviderAddRecording(filePath);
+              break;
           }
       }
     } catch (e, stackTrace) {
@@ -285,6 +310,48 @@ class MinimalCaptureProvider extends ChangeNotifier {
       } else {
           debugPrint("[CaptureProvider] Could not notify DeviceProvider setRecordingState: Context not available.");
       }
+  }
+  
+  void _notifyDeviceProviderAddRecording(String filePath) {
+      final context = MyApp.navigatorKey.currentContext;
+      if (context != null && context.mounted) {
+          try {
+              Provider.of<MinimalDeviceProvider>(context, listen: false).addRecording(filePath);
+              debugPrint("[CaptureProvider] Notified DeviceProvider to add recording.");
+          } catch (e) {
+              debugPrint("[CaptureProvider] Error notifying DeviceProvider: $e");
+          }
+      } else {
+          debugPrint("[CaptureProvider] Could not notify DeviceProvider: Context not available.");
+      }
+  }
+  
+  // Handle AI Query recording
+  Future<void> _handleAIQuery(String audioPath) async {
+    debugPrint("[CaptureProvider] Processing AI query from: $audioPath");
+    
+    // TODO: Implement AI query processing
+    // 1. Transcribe audio
+    // 2. Send to AI service
+    // 3. Show response to user
+    // 4. Save query/response pair
+    
+    // For now, just save as normal recording
+    _notifyDeviceProviderAddRecording(audioPath);
+  }
+  
+  // Handle Knowledge Capture recording
+  Future<void> _handleKnowledgeCapture(String audioPath) async {
+    debugPrint("[CaptureProvider] Processing knowledge capture from: $audioPath");
+    
+    // TODO: Implement knowledge capture
+    // 1. Transcribe audio
+    // 2. Extract entities and concepts
+    // 3. Add to knowledge graph
+    // 4. Sync with external services (Obsidian, etc.)
+    
+    // For now, just save as normal recording
+    _notifyDeviceProviderAddRecording(audioPath);
   }
 
   @override
