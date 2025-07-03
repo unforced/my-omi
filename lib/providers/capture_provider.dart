@@ -11,6 +11,10 @@ import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart'; // Added
 import 'package:intl/intl.dart'; // Added for timestamp filenames
 import 'package:omi_minimal_fork/main.dart'; // Import MyApp for navigatorKey
+import 'package:omi_minimal_fork/services/transcription_service.dart';
+import 'package:omi_minimal_fork/services/ai_service.dart';
+import 'package:omi_minimal_fork/models/recording.dart';
+import 'package:omi_minimal_fork/services/recording_service.dart';
 
 enum RecordingMode {
   standard,   // Single tap - normal recording
@@ -330,28 +334,184 @@ class MinimalCaptureProvider extends ChangeNotifier {
   Future<void> _handleAIQuery(String audioPath) async {
     debugPrint("[CaptureProvider] Processing AI query from: $audioPath");
     
-    // TODO: Implement AI query processing
-    // 1. Transcribe audio
-    // 2. Send to AI service
-    // 3. Show response to user
-    // 4. Save query/response pair
-    
-    // For now, just save as normal recording
-    _notifyDeviceProviderAddRecording(audioPath);
+    try {
+      final context = MyApp.navigatorKey.currentContext;
+      if (context == null || !context.mounted) {
+        debugPrint("[CaptureProvider] No context available for AI query");
+        return;
+      }
+      
+      // Get services
+      final transcriptionManager = Provider.of<TranscriptionServiceManager>(context, listen: false);
+      final aiManager = Provider.of<AIServiceManager>(context, listen: false);
+      final recordingService = Provider.of<RecordingService>(context, listen: false);
+      
+      // Check if services are configured
+      if (!transcriptionManager.isConfigured) {
+        _showMessage("Please configure transcription service in settings");
+        _notifyDeviceProviderAddRecording(audioPath); // Save as normal recording
+        return;
+      }
+      
+      if (!aiManager.isConfigured) {
+        _showMessage("Please configure AI service in settings");
+        _notifyDeviceProviderAddRecording(audioPath); // Save as normal recording
+        return;
+      }
+      
+      // Show processing indicator
+      _showMessage("Processing your question...", duration: const Duration(seconds: 30));
+      
+      // 1. Transcribe audio
+      debugPrint("[CaptureProvider] Transcribing audio...");
+      final transcriptionResult = await transcriptionManager.transcribeAudio(audioPath);
+      final question = transcriptionResult.text;
+      debugPrint("[CaptureProvider] Transcription: $question");
+      
+      // 2. Send to AI service
+      debugPrint("[CaptureProvider] Querying AI...");
+      final aiResponse = await aiManager.query(question);
+      debugPrint("[CaptureProvider] AI Response: ${aiResponse.text}");
+      
+      // 3. Create and save AI query recording
+      final recording = Recording(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        timestamp: DateTime.now(),
+        type: RecordingType.conversation, // AI queries stored as conversations
+        audioPath: audioPath,
+        duration: transcriptionResult.duration ?? const Duration(seconds: 0),
+        transcription: question,
+        keywords: transcriptionManager.extractKeyPhrases(question),
+        metadata: {
+          'mode': 'ai_query',
+          'ai_response': aiResponse.text,
+          'ai_service': aiManager.activeServiceType.displayName,
+          'sources': aiResponse.sources,
+        },
+      );
+      
+      await recordingService.addRecordingObject(recording);
+      
+      // 4. Show AI response to user
+      _showAIResponse(question, aiResponse.text);
+      
+      // TODO: Implement voice response playback
+      
+    } catch (e) {
+      debugPrint("[CaptureProvider] Error processing AI query: $e");
+      _showMessage("Error: ${e.toString()}");
+      // Save as normal recording on error
+      _notifyDeviceProviderAddRecording(audioPath);
+    }
   }
   
   // Handle Knowledge Capture recording
   Future<void> _handleKnowledgeCapture(String audioPath) async {
     debugPrint("[CaptureProvider] Processing knowledge capture from: $audioPath");
     
-    // TODO: Implement knowledge capture
-    // 1. Transcribe audio
-    // 2. Extract entities and concepts
-    // 3. Add to knowledge graph
-    // 4. Sync with external services (Obsidian, etc.)
-    
-    // For now, just save as normal recording
-    _notifyDeviceProviderAddRecording(audioPath);
+    try {
+      final context = MyApp.navigatorKey.currentContext;
+      if (context == null || !context.mounted) {
+        debugPrint("[CaptureProvider] No context available for knowledge capture");
+        return;
+      }
+      
+      // Get services
+      final transcriptionManager = Provider.of<TranscriptionServiceManager>(context, listen: false);
+      final recordingService = Provider.of<RecordingService>(context, listen: false);
+      
+      if (!transcriptionManager.isConfigured) {
+        _showMessage("Please configure transcription service in settings");
+        _notifyDeviceProviderAddRecording(audioPath); // Save as normal recording
+        return;
+      }
+      
+      // Show processing indicator
+      _showMessage("Capturing knowledge...");
+      
+      // 1. Transcribe audio
+      final transcriptionResult = await transcriptionManager.transcribeAudio(audioPath);
+      final content = transcriptionResult.text;
+      
+      // 2. Extract key information
+      final keywords = transcriptionManager.extractKeyPhrases(content);
+      final actionItems = transcriptionManager.extractActionItems(content);
+      
+      // 3. Create knowledge recording
+      final recording = Recording(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        timestamp: DateTime.now(),
+        type: RecordingType.journal, // Knowledge stored as journal entries
+        audioPath: audioPath,
+        duration: transcriptionResult.duration ?? const Duration(seconds: 0),
+        transcription: content,
+        keywords: keywords,
+        metadata: {
+          'mode': 'knowledge_capture',
+          'action_items': actionItems,
+          'language': transcriptionResult.language,
+        },
+      );
+      
+      await recordingService.addRecordingObject(recording);
+      
+      // 4. TODO: Sync with external services (Obsidian, Notion, etc.)
+      
+      _showMessage("Knowledge captured successfully!");
+      
+    } catch (e) {
+      debugPrint("[CaptureProvider] Error processing knowledge capture: $e");
+      _showMessage("Error: ${e.toString()}");
+      // Save as normal recording on error
+      _notifyDeviceProviderAddRecording(audioPath);
+    }
+  }
+
+  // Helper to show messages to user
+  void _showMessage(String message, {Duration duration = const Duration(seconds: 3)}) {
+    final context = MyApp.navigatorKey.currentContext;
+    if (context != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: duration,
+        ),
+      );
+    }
+  }
+  
+  // Show AI response in a dialog
+  void _showAIResponse(String question, String response) {
+    final context = MyApp.navigatorKey.currentContext;
+    if (context != null && context.mounted) {
+      showDialog(
+        context: context,
+        builder: (BuildContext dialogContext) => AlertDialog(
+          title: const Text('AI Response'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('You asked:', style: Theme.of(dialogContext).textTheme.bodySmall),
+                const SizedBox(height: 4),
+                Text(question, style: const TextStyle(fontStyle: FontStyle.italic)),
+                const SizedBox(height: 16),
+                Text('Response:', style: Theme.of(dialogContext).textTheme.bodySmall),
+                const SizedBox(height: 4),
+                Text(response),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   @override

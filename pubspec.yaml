@@ -42,6 +42,9 @@ dependencies:
   share_plus: ^9.0.0 # Sharing files (match original version)
   just_audio: ^0.9.36 # Audio playback (match original version)
   # Optional: whisper_flutter: ^x.y.z # Uncomment and add version if implementing Whisper
+  
+  # AI and Transcription Dependencies
+  flutter_dotenv: ^5.1.0 # For secure API key storage
 
   # Utilities copied/needed by core files
   collection: ^1.18.0 # Used by services

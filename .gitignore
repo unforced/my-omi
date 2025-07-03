@@ -1,6 +1,10 @@
 # Miscellaneous
 *.class
 *.log
+
+# Environment variables
+.env
+.env.local
 *.pyc
 *.swp
 .DS_Store

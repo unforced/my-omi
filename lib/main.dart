@@ -17,6 +17,11 @@ import 'package:omi_minimal_fork/utils/audio/wav_bytes.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 import 'package:omi_minimal_fork/utils/firmware_mixin.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:omi_minimal_fork/services/ai_service.dart';
+import 'package:omi_minimal_fork/services/transcription_service.dart';
+import 'package:omi_minimal_fork/services/recording_service.dart';
+import 'package:omi_minimal_fork/screens/ai_settings_screen.dart';
+import 'package:omi_minimal_fork/screens/transcription_settings_screen.dart';
 
 // TODO: Add imports for State Management (Provider)
 
@@ -105,6 +110,9 @@ void main() async { // Make main async
       providers: [
         ChangeNotifierProvider(create: (_) => MinimalDeviceProvider()),
         ChangeNotifierProvider(create: (_) => MinimalCaptureProvider()),
+        ChangeNotifierProvider(create: (_) => AIServiceManager()),
+        ChangeNotifierProvider(create: (_) => TranscriptionServiceManager()),
+        ChangeNotifierProvider(create: (_) => RecordingService()),
       ],
       child: const MyApp(),
     ),
@@ -374,13 +382,43 @@ class _HomePageState extends State<HomePage> with FirmwareMixin<HomePage> { // C
       appBar: AppBar(
         title: const Text('Omi Minimal Fork'),
         actions: [
-          // Scan Button
-          IconButton(
-            icon: Icon(deviceProvider.isScanning ? Icons.stop : Icons.search),
-            tooltip: deviceProvider.isScanning ? 'Stop Scan' : 'Scan for Devices',
-            onPressed: deviceProvider.isScanning
-                ? null 
-                : () => deviceProvider.startScan(),
+          // Settings Menu
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'ai_settings':
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const AISettingsScreen()),
+                  );
+                  break;
+                case 'transcription_settings':
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const TranscriptionSettingsScreen()),
+                  );
+                  break;
+              }
+            },
+            itemBuilder: (BuildContext context) => [
+              const PopupMenuItem(
+                value: 'ai_settings',
+                child: ListTile(
+                  leading: Icon(Icons.smart_toy),
+                  title: Text('AI Settings'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'transcription_settings',
+                child: ListTile(
+                  leading: Icon(Icons.transcribe),
+                  title: Text('Transcription Settings'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),

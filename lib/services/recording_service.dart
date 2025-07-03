@@ -81,6 +81,13 @@ class RecordingService extends ChangeNotifier {
     _scheduleTranscription(recording);
   }
   
+  // Add a recording object directly (used by AI and knowledge capture)
+  Future<void> addRecordingObject(Recording recording) async {
+    _recordings.insert(0, recording); // Add to beginning
+    await _saveRecordings();
+    notifyListeners();
+  }
+  
   // Update recording (e.g., after transcription)
   Future<void> updateRecording(Recording recording) async {
     final index = _recordings.indexWhere((r) => r.id == recording.id);
