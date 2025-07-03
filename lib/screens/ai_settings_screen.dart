@@ -14,9 +14,28 @@ class _AISettingsScreenState extends State<AISettingsScreen> {
   bool _obscureApiKey = true;
   
   @override
+  void initState() {
+    super.initState();
+    // Load existing configuration when screen opens
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadExistingConfiguration();
+    });
+  }
+  
+  @override
   void dispose() {
     _apiKeyController.dispose();
     super.dispose();
+  }
+  
+  void _loadExistingConfiguration() {
+    final aiManager = Provider.of<AIServiceManager>(context, listen: false);
+    
+    // Load saved API key if exists
+    final savedKey = aiManager.currentSettings['apiKey'];
+    if (savedKey != null) {
+      _apiKeyController.text = savedKey;
+    }
   }
 
   @override
@@ -211,10 +230,12 @@ class _AISettingsScreenState extends State<AISettingsScreen> {
   }
   
   void _selectService(AIServiceType service) {
+    final aiManager = Provider.of<AIServiceManager>(context, listen: false);
     setState(() {
       _apiKeyController.clear();
     });
-    // Don't save yet - wait for API key
+    // Update the active service type but don't save configuration yet
+    // This allows the UI to update without losing saved settings
   }
   
   void _saveApiKey() async {

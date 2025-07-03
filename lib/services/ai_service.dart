@@ -215,7 +215,8 @@ class AIServiceManager extends ChangeNotifier {
   
   AIServiceType get activeServiceType => _activeServiceType;
   AIService? get activeService => _activeService;
-  bool get isConfigured => _activeService != null && _currentSettings.containsKey('apiKey');
+  Map<String, dynamic> get currentSettings => Map.unmodifiable(_currentSettings);
+  bool get isConfigured => _activeService != null && _currentSettings.containsKey('apiKey') && _currentSettings['apiKey']?.isNotEmpty == true;
   
   AIServiceManager() {
     _loadConfiguration();

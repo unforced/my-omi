@@ -15,10 +15,37 @@ class _TranscriptionSettingsScreenState extends State<TranscriptionSettingsScree
   bool _obscureApiKey = true;
   
   @override
+  void initState() {
+    super.initState();
+    // Load existing configuration when screen opens
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadExistingConfiguration();
+    });
+  }
+  
+  @override
   void dispose() {
     _apiKeyController.dispose();
     _endpointController.dispose();
     super.dispose();
+  }
+  
+  void _loadExistingConfiguration() {
+    final transcriptionManager = Provider.of<TranscriptionServiceManager>(context, listen: false);
+    
+    // Load saved settings based on provider
+    if (transcriptionManager.activeProvider == TranscriptionProvider.openaiWhisper) {
+      // Check if we have saved settings
+      final savedKey = transcriptionManager.currentSettings['apiKey'];
+      if (savedKey != null) {
+        _apiKeyController.text = savedKey;
+      }
+    } else if (transcriptionManager.activeProvider == TranscriptionProvider.local) {
+      final savedEndpoint = transcriptionManager.currentSettings['endpoint'];
+      if (savedEndpoint != null) {
+        _endpointController.text = savedEndpoint;
+      }
+    }
   }
 
   @override
@@ -229,6 +256,8 @@ class _TranscriptionSettingsScreenState extends State<TranscriptionSettingsScree
     setState(() {
       _apiKeyController.clear();
       _endpointController.clear();
+      // Don't actually change the provider until save is pressed
+      // This is just updating the UI
     });
   }
   

@@ -186,8 +186,9 @@ class TranscriptionServiceManager extends ChangeNotifier {
   
   TranscriptionProvider get activeProvider => _activeProvider;
   TranscriptionService? get activeService => _activeService;
+  Map<String, dynamic> get currentSettings => Map.unmodifiable(_currentSettings);
   bool get isConfigured => _activeService != null && 
-    (!_activeService!.requiresApiKey || _currentSettings.containsKey('apiKey'));
+    (!_activeService!.requiresApiKey || (_currentSettings.containsKey('apiKey') && _currentSettings['apiKey']?.isNotEmpty == true));
   bool get isTranscribing => _isTranscribing;
   
   TranscriptionServiceManager() {
